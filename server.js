@@ -156,14 +156,15 @@ app.post('/api/check', async (req, res) => {
 You said an English word out loud. The child answered (in Bulgarian) with what she thinks it means.
 Her spoken answer was transcribed by speech-to-text, so expect small transcription noise; judge by meaning, not exact spelling.
 Compare her answer to the correct Bulgarian meanings.
+IMPORTANT — accept synonyms: a meaning counts as CORRECT if she says ANY Bulgarian word or phrase with the same sense, even if it is not the exact word written on the sheet (e.g. "щастлив" for "радостен", "голям" for "едър"). Also accept different grammatical forms (verb aspect, gender, plural). Only treat a meaning as missed if she gave no equivalent for it at all.
 Decide:
-- "correct" = she gave ALL the important meanings with no wrong ones.
-- "incorrect" = she missed a meaning, or gave a wrong one.
+- "correct" = she covered ALL the important meanings (exact words OR valid synonyms) with no wrong ones.
+- "incorrect" = she missed a meaning entirely, or gave a meaning that is genuinely wrong.
 Reply in STRICT JSON only:
 {
   "status": "correct" | "incorrect",
-  "missed": ["meanings she did not say"],
-  "wrong": ["things she said that are wrong"],
+  "missed": ["meanings she did not cover, not even with a synonym"],
+  "wrong": ["things she said that are genuinely wrong"],
   "feedback": "one short, kind sentence to the child, in Bulgarian"
 }`;
 
