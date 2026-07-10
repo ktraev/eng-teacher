@@ -163,16 +163,34 @@
 
 <script>
 const $ = (id) => document.getElementById(id);
-const STORAGE_KEY = 'et_folders_v1';
 
-// ---------------- storage ----------------
+// ---------------- storage (server database) ----------------
 let folders = [];
-function loadFolders() {
-  try { folders = JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; }
-  catch { folders = []; }
+async function apiGet() {
+  const r = await fetch('/api/folders');
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  folders = j.folders || [];
 }
-function saveFolders() { localStorage.setItem(STORAGE_KEY, JSON.stringify(folders)); }
-function uid() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
+async function apiCreate(name, words) {
+  const r = await fetch('/api/folders', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name, words }) });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j.folder;
+}
+async function apiUpdate(id, patch) {
+  const r = await fetch('/api/folders/' + id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(patch) });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  return j.folder;
+}
+async function apiDelete(id) {
+  const r = await fetch('/api/folders/' + id, { method:'DELETE' });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+}
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 // ---------------- screen switching ----------------
@@ -205,12 +223,15 @@ function renderFolders(){
 $('newFolderBtn').addEventListener('click', () => openEditor(null));
 $('doneHomeBtn').addEventListener('click', goHome);
 
-function deleteFolder(id){
+async function deleteFolder(id){
   const f = folders.find(x => x.id === id);
   if (!f) return;
   if (!confirm('Да изтрия папка „' + f.name + '“?')) return;
-  folders = folders.filter(x => x.id !== id);
-  saveFolders(); renderFolders();
+  try {
+    await apiDelete(id);
+    folders = folders.filter(x => x.id !== id);
+    renderFolders();
+  } catch (e) { alert('Грешка при изтриване: ' + e.message); }
 }
 function editFolder(id){ const f = folders.find(x => x.id === id); if (f) openEditor(f); }
 
@@ -288,7 +309,7 @@ function addRow(){ syncFromDom(); editRows.push({ english:'', meanings:[], warni
 function removeRow(i){ syncFromDom(); editRows.splice(i,1); if(!editRows.length) editRows.push({english:'',meanings:[],warnings:[]}); renderRows(); }
 $('addRowBtn').addEventListener('click', addRow);
 
-$('saveFolderBtn').addEventListener('click', () => {
+$('saveFolderBtn').addEventListener('click', async () => {
   syncFromDom();
   const name = $('folderName').value.trim();
   const words = editRows
@@ -296,14 +317,22 @@ $('saveFolderBtn').addEventListener('click', () => {
     .map(r => ({ english:r.english.trim(), meanings:r.meanings }));
   if (!name) { $('saveStatus').textContent = 'Дай име на папката.'; return; }
   if (!words.length) { $('saveStatus').textContent = 'Добави поне една дума с превод.'; return; }
-  if (editingId) {
-    const f = folders.find(x => x.id === editingId);
-    f.name = name; f.words = words;   // keep previous lastScore
-  } else {
-    folders.unshift({ id: uid(), name, words, lastScore: null, createdAt: Date.now() });
+  $('saveFolderBtn').disabled = true;
+  $('saveStatus').textContent = 'Запазвам…';
+  try {
+    if (editingId) {
+      const f = await apiUpdate(editingId, { name, words });   // keeps previous lastScore
+      const i = folders.findIndex(x => x.id === editingId);
+      if (i >= 0) folders[i] = f;
+    } else {
+      folders.unshift(await apiCreate(name, words));
+    }
+    goHome();
+  } catch (e) {
+    $('saveStatus').textContent = 'Грешка: ' + e.message;
+  } finally {
+    $('saveFolderBtn').disabled = false;
   }
-  saveFolders();
-  goHome();
 });
 
 // ================= AUDIO HELPERS (Safari/iOS safe) =================
@@ -425,7 +454,7 @@ function recordScore(){
   const total = quizWords.length;
   const pct = total ? Math.round(firstRoundErrors / total * 100) : 0;
   currentFolder.lastScore = { errors: firstRoundErrors, total, pct, at: Date.now() };
-  saveFolders();
+  apiUpdate(currentFolder.id, { lastScore: currentFolder.lastScore }).catch(e => console.error(e));
 }
 
 $('listenBtn').addEventListener('click', () => { if (current) speak(current.english, 'nova'); });
@@ -581,10 +610,35 @@ function finish(){
   speak('Congratulations! You finished. Great work!');
 }
 
+// ---------------- one-time migration of folders saved in this browser ----------------
+async function migrateLocal(){
+  let old = null;
+  try { old = JSON.parse(localStorage.getItem('et_folders_v1')); } catch {}
+  if (!Array.isArray(old) || !old.length) return;
+  for (const f of old) {
+    if (f && f.name && Array.isArray(f.words) && f.words.length) {
+      try {
+        const created = await apiCreate(f.name, f.words);
+        if (f.lastScore) await apiUpdate(created.id, { lastScore: f.lastScore });
+      } catch (e) { console.error('migrate', e); }
+    }
+  }
+  localStorage.removeItem('et_folders_v1');   // so it only migrates once
+}
+
 // ---------------- boot ----------------
-loadFolders();
-renderFolders();
-showScreen('foldersScreen');
+(async () => {
+  try {
+    await apiGet();
+    if (!folders.length) { await migrateLocal(); await apiGet(); }   // pull in old browser folders
+  } catch (e) {
+    console.error(e);
+    $('emptyFolders').textContent = 'Няма връзка със сървъра.';
+    $('emptyFolders').classList.remove('hidden');
+  }
+  renderFolders();
+  showScreen('foldersScreen');
+})();
 </script>
 </body>
 </html>

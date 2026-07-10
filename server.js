@@ -4,6 +4,7 @@ import multer from 'multer';
 import OpenAI, { toFile } from 'openai';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import { listFolders, createFolder, updateFolder, deleteFolder } from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -271,6 +272,36 @@ Her English translation: "${answer}"`;
     console.error('Translation check error:', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+// ---------------------------------------------------------------------------
+// 7. Folders — saved word sets (stored in the local database file)
+// ---------------------------------------------------------------------------
+app.get('/api/folders', async (req, res) => {
+  try { res.json({ folders: await listFolders() }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/folders', async (req, res) => {
+  try {
+    const { name, words } = req.body;
+    if (!name || !Array.isArray(words) || !words.length)
+      return res.status(400).json({ error: 'name and words are required' });
+    res.json({ folder: await createFolder({ name, words }) });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.put('/api/folders/:id', async (req, res) => {
+  try {
+    const folder = await updateFolder(req.params.id, req.body || {});
+    if (!folder) return res.status(404).json({ error: 'not found' });
+    res.json({ folder });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/api/folders/:id', async (req, res) => {
+  try { await deleteFolder(req.params.id); res.json({ ok: true }); }
+  catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.listen(PORT, () => {

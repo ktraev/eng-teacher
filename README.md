@@ -10,7 +10,9 @@ A voice vocabulary tutor for a Bulgarian-speaking child, powered by OpenAI.
 
 *Screen 2 — Exercise.* Tap a folder to start. Each English word is shown as text (with a 🔊 button to hear it), and for each word she answers one of two ways, chosen at random ~50/50: **tap the meanings** — six Bulgarian options appear and she selects the correct one or ones (a word can have several) — or **type the meaning** in a field (typed answers accept synonyms). When she errs the correct answer is shown on screen and she taps **Напред ▶** to continue at her own pace. Missed words are gathered and repeated in fresh shuffled rounds until she gets them all. Then come Bulgarian sentences to translate into English out loud (this final part still uses voice). Her first-round error % is saved back to the folder.
 
-Everything is turn-based: **OpenAI TTS** speaks, the mic records, **Whisper** transcribes, **GPT-4o** judges. Your API key stays on the server — never on the phone. Folders are stored **in the phone's browser** (localStorage), so they persist across sessions and app redeploys without any database. (They live on that one device/browser; clearing browser data removes them.)
+Everything is turn-based: **OpenAI TTS** speaks, the mic records, **Whisper** transcribes, **GPT-4o** judges. Your API key stays on the server — never on the phone.
+
+**Folders are stored in a local database file on your computer** — `data/folders.json` next to the app (change the location with `DATA_DIR` in `.env`). This persists across restarts and is served to any device that opens the app, so it doesn't depend on the browser. The first time the app loads, any folders previously saved in your browser are automatically imported into this file. Back up the `data` folder to keep your word sets safe.
 
 ---
 
