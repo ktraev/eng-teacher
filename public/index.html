@@ -116,6 +116,27 @@ let sentences = [];
 let sIndex = 0;
 
 // ---- audio helpers ----
+// One reusable <audio> element. iOS only lets audio play if the SAME element
+// was first played during a real user tap, so we "unlock" it on the Ready tap.
+let player = null;
+function getPlayer() {
+  if (!player) { player = new Audio(); player.setAttribute('playsinline', ''); }
+  return player;
+}
+function silentWavUrl(ms = 120) {
+  const sr = 8000, n = (sr * ms / 1000) | 0;
+  const buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => { for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i)); };
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, sr, true); v.setUint32(28, sr * 2, true); v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true); w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+function unlockAudio() {           // call this synchronously inside a tap handler
+  const p = getPlayer();
+  try { p.src = silentWavUrl(); const pr = p.play(); if (pr && pr.catch) pr.catch(() => {}); } catch (e) {}
+}
 async function speak(text, voice) {
   try {
     const r = await fetch('/api/tts', {
@@ -124,35 +145,56 @@ async function speak(text, voice) {
     });
     if (!r.ok) return;
     const blob = await r.blob();
-    const audio = new Audio(URL.createObjectURL(blob));
-    await audio.play().catch(()=>{});
-    return new Promise(res => { audio.onended = res; audio.onerror = res; });
-  } catch(e){}
+    const url = URL.createObjectURL(blob);
+    const p = getPlayer();
+    await new Promise((resolve) => {
+      let done = false;
+      const fin = () => { if (done) return; done = true; URL.revokeObjectURL(url); resolve(); };
+      p.onended = fin; p.onerror = fin;
+      p.src = url;
+      const pr = p.play();
+      if (pr && pr.catch) pr.catch(fin);   // playback blocked -> don't hang
+      setTimeout(fin, 20000);              // hard safety net
+    });
+  } catch(e){ console.error('speak', e); }
 }
 
-let mediaRecorder, chunks = [], stream;
+let mediaRecorder, chunks = [], stream, recExt = 'webm';
 async function ensureMic() {
   if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio:true });
   return stream;
 }
+function pickMime() {
+  const cands = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/aac'];
+  if (window.MediaRecorder && MediaRecorder.isTypeSupported) {
+    for (const t of cands) if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return ''; // let the browser pick its default (Safari -> mp4)
+}
 function startRec() {
+  if (!window.MediaRecorder) throw new Error('Браузърът не поддържа запис на глас.');
   chunks = [];
-  mediaRecorder = new MediaRecorder(stream);
+  const mime = pickMime();
+  recExt = (mime.includes('mp4') || mime.includes('aac')) ? 'mp4' : 'webm';
+  mediaRecorder = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
   mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
   mediaRecorder.start();
 }
 function stopRec() {
-  return new Promise(res => {
-    mediaRecorder.onstop = () => res(new Blob(chunks, { type:'audio/webm' }));
-    mediaRecorder.stop();
+  return new Promise((res, rej) => {
+    try {
+      mediaRecorder.onstop = () => res(new Blob(chunks, { type: mediaRecorder.mimeType || 'audio/webm' }));
+      mediaRecorder.stop();
+    } catch (e) { rej(e); }
   });
 }
 async function transcribe(blob, lang) {
   const fd = new FormData();
-  fd.append('audio', blob, 'answer.webm');
+  fd.append('audio', blob, 'answer.' + recExt);
   fd.append('lang', lang);
   const r = await fetch('/api/stt', { method:'POST', body: fd });
   const j = await r.json();
+  if (j.error) throw new Error(j.error);
   return (j.text || '').trim();
 }
 
@@ -219,7 +261,13 @@ $('againBtn').addEventListener('click', () => location.reload());
 
 // ---- STEP 3: quiz ----
 $('readyBtn').addEventListener('click', async () => {
-  await ensureMic();                       // unlock mic + audio via user gesture
+  unlockAudio();                           // MUST run first, inside the tap, for iOS audio
+  try {
+    await ensureMic();                     // ask for the microphone
+  } catch (e) {
+    alert('Нужен е достъп до микрофона. Разреши го в браузъра и опитай пак.');
+    return;
+  }
   $('review').classList.add('hidden');
   $('quiz').classList.remove('hidden');
   queue = shuffle(words.map(w => w.english));
@@ -247,29 +295,39 @@ $('repeatBtn').addEventListener('click', () => { if (current) speak(current.engl
 let recording = false;
 $('recBtn').addEventListener('click', async () => {
   if (!current) return;
-  if (!recording) {
-    startRec(); recording = true;
-    $('mic').classList.add('rec');
-    $('recBtn').textContent = '⏹ Спри и провери';
-    $('quizStatus').textContent = 'Слушам те…';
-  } else {
+  try {
+    if (!recording) {
+      await ensureMic();
+      startRec(); recording = true;
+      $('mic').classList.add('rec');
+      $('recBtn').textContent = '⏹ Спри и провери';
+      $('quizStatus').textContent = 'Слушам те…';
+    } else {
+      recording = false;
+      $('mic').classList.remove('rec');
+      $('recBtn').textContent = '🎤 Кажи отговора';
+      $('recBtn').disabled = true;
+      $('quizStatus').innerHTML = '<div class="spinner"></div>';
+      const blob = await stopRec();
+      const said = await transcribe(blob, 'bg');
+      $('heard').textContent = said ? '„' + said + '“' : '';
+      if (!said || saidRepeat(said)) {
+        $('quizStatus').textContent = 'Повтарям думата…';
+        $('recBtn').disabled = false;
+        await speak(current.english, 'nova');
+        $('quizStatus').textContent = 'Кажи значенията на български';
+        return;
+      }
+      await evaluateWord(said);
+      $('recBtn').disabled = false;
+    }
+  } catch (e) {
+    console.error(e);
     recording = false;
     $('mic').classList.remove('rec');
     $('recBtn').textContent = '🎤 Кажи отговора';
-    $('recBtn').disabled = true;
-    $('quizStatus').innerHTML = '<div class="spinner"></div>';
-    const blob = await stopRec();
-    const said = await transcribe(blob, 'bg');
-    $('heard').textContent = said ? '„' + said + '“' : '';
-    if (!said || saidRepeat(said)) {
-      $('quizStatus').textContent = 'Повтарям думата…';
-      $('recBtn').disabled = false;
-      await speak(current.english, 'nova');
-      $('quizStatus').textContent = 'Кажи значенията на български';
-      return;
-    }
-    await evaluateWord(said);
     $('recBtn').disabled = false;
+    $('quizStatus').textContent = 'Грешка: ' + e.message;
   }
 });
 
@@ -329,7 +387,9 @@ $('tRepeatBtn').addEventListener('click', () => {
 
 let tRecording = false;
 $('tRecBtn').addEventListener('click', async () => {
+ try {
   if (!tRecording) {
+    await ensureMic();
     startRec(); tRecording = true;
     $('tMic').classList.add('rec');
     $('tRecBtn').textContent = '⏹ Спри и провери';
@@ -368,6 +428,14 @@ $('tRecBtn').addEventListener('click', async () => {
       $('tRecBtn').disabled = false;
     }
   }
+ } catch (e) {
+   console.error(e);
+   tRecording = false;
+   $('tMic').classList.remove('rec');
+   $('tRecBtn').textContent = '🎤 Кажи превода';
+   $('tRecBtn').disabled = false;
+   $('tStatus').textContent = 'Грешка: ' + e.message;
+ }
 });
 
 function finish() {
