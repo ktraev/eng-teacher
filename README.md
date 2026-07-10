@@ -4,14 +4,13 @@ A voice vocabulary tutor for a Bulgarian-speaking child, powered by OpenAI.
 
 **The flow**
 
-1. She photographs her English–Bulgarian word sheets and uploads them from her phone browser.
-2. GPT-4o reads (OCRs) the photos, checks the English spelling and the Bulgarian translations, and flags anything that looks wrong.
-3. She reviews the words, taps **"Готова ли си?"** (Are you ready?).
-4. The app speaks each English word aloud, one at a time, in random order. If she says *"не те чух" / "repeat"*, it repeats the word.
-5. She says all the Bulgarian meanings out loud. If she misses one or makes a mistake, the app corrects her and brings that word back later.
-6. When every word is answered correctly, it gives her Bulgarian sentences to translate into English out loud.
+*Screen 1 — Folders.* A list of saved word sets ("папки"). Each shows how many words it has and a coloured badge with her last error % so she can see which sets need more practice. Tap **＋ Нова папка** to make a new one.
 
-Everything is turn-based: **OpenAI TTS** speaks, the mic records, **Whisper** transcribes, **GPT-4o** judges. Your API key stays on the server — never on the phone.
+*Screen 1b — Create/edit a folder.* Upload many page photos at once. GPT-4o reads (OCRs) them, checks English spelling and Bulgarian translations, and flags anything odd. The words appear in an editable table where she can fix, add, or delete entries. She gives the folder a name and saves it. (✏️ edits an existing folder, 🗑️ deletes one.)
+
+*Screen 2 — Exercise.* Tap a folder to start. The app speaks each English word aloud, one at a time, in shuffled order. If she says *"не те чух" / "repeat"*, it repeats the word. She says the Bulgarian meanings out loud; the correct answer is shown **on screen** (not spoken) when she errs, and she taps **Напред ▶** to continue at her own pace. Missed words are gathered and repeated in fresh shuffled rounds until she gets them all. Then come Bulgarian sentences to translate into English out loud. Her first-round error % is saved back to the folder.
+
+Everything is turn-based: **OpenAI TTS** speaks, the mic records, **Whisper** transcribes, **GPT-4o** judges. Your API key stays on the server — never on the phone. Folders are stored **in the phone's browser** (localStorage), so they persist across sessions and app redeploys without any database. (They live on that one device/browser; clearing browser data removes them.)
 
 ---
 
