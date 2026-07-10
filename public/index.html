@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>English Teacher</title>
+<style>
+  :root { --bg:#0f172a; --card:#1e293b; --accent:#6366f1; --accent2:#22c55e;
+          --warn:#f59e0b; --err:#ef4444; --text:#f1f5f9; --muted:#94a3b8; }
+  * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         background:var(--bg); color:var(--text); min-height:100vh; }
+  .wrap { max-width:520px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:22px; text-align:center; margin:8px 0 20px; }
+  h1 span { font-size:26px; }
+  .card { background:var(--card); border-radius:18px; padding:20px; margin-bottom:16px;
+          box-shadow:0 6px 20px rgba(0,0,0,.25); }
+  .hidden { display:none !important; }
+  button { font-size:18px; font-weight:600; border:none; border-radius:14px; padding:16px 20px;
+           width:100%; color:#fff; background:var(--accent); cursor:pointer; margin-top:10px; transition:.15s; }
+  button:active { transform:scale(.98); }
+  button.green { background:var(--accent2); }
+  button.ghost { background:transparent; border:2px solid var(--accent); color:var(--text); }
+  button:disabled { opacity:.5; }
+  .file-btn { display:block; text-align:center; border:2px dashed var(--accent); border-radius:14px;
+              padding:28px 12px; color:var(--muted); font-size:16px; cursor:pointer; }
+  input[type=file] { display:none; }
+  .thumbs { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+  .thumbs img { width:64px; height:64px; object-fit:cover; border-radius:10px; }
+  .word-row { display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+              padding:12px 0; border-bottom:1px solid #334155; }
+  .word-row:last-child { border-bottom:none; }
+  .en { font-weight:700; font-size:17px; }
+  .bg { color:var(--muted); font-size:15px; }
+  .warn { color:var(--warn); font-size:13px; margin-top:4px; }
+  .badge { font-size:12px; background:var(--warn); color:#000; border-radius:8px; padding:2px 8px; margin-left:6px; }
+  .status { text-align:center; color:var(--muted); min-height:22px; margin:8px 0; }
+  .bigword { text-align:center; font-size:40px; font-weight:800; margin:16px 0; letter-spacing:1px; }
+  .progress { text-align:center; color:var(--muted); font-size:14px; margin-bottom:6px; }
+  .mic { width:96px; height:96px; border-radius:50%; margin:16px auto; display:flex;
+         align-items:center; justify-content:center; font-size:40px; background:var(--accent); }
+  .mic.rec { background:var(--err); animation:pulse 1s infinite; }
+  @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(239,68,68,.6)} 100%{box-shadow:0 0 0 22px rgba(239,68,68,0)} }
+  .feedback { text-align:center; font-size:17px; margin:12px 0; line-height:1.4; }
+  .ok { color:var(--accent2); } .bad { color:var(--err); }
+  .heard { text-align:center; color:var(--muted); font-size:14px; font-style:italic; }
+  .sent { font-size:20px; text-align:center; margin:14px 0; line-height:1.4; }
+  .spinner { width:34px;height:34px;border:4px solid #334155;border-top-color:var(--accent);
+             border-radius:50%;animation:spin 1s linear infinite;margin:20px auto; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>📚</span> English Teacher</h1>
+
+  <!-- STEP 1: upload -->
+  <div id="upload" class="card">
+    <label class="file-btn" for="fileInput">📷 Снимай или качи листовете с думите</label>
+    <input id="fileInput" type="file" accept="image/*" multiple />
+    <div id="thumbs" class="thumbs"></div>
+    <button id="ocrBtn" class="green" disabled>Прочети думите</button>
+    <div id="uploadStatus" class="status"></div>
+  </div>
+
+  <!-- STEP 2: review -->
+  <div id="review" class="card hidden">
+    <h2 style="font-size:18px;margin:0 0 6px">Намерени думи</h2>
+    <div id="warnBanner" class="warn hidden"></div>
+    <div id="wordList"></div>
+    <button id="readyBtn" class="green">Готова ли си? Започни упражнението 🎤</button>
+    <button id="restartBtn" class="ghost">Качи други листове</button>
+  </div>
+
+  <!-- STEP 3: quiz -->
+  <div id="quiz" class="card hidden">
+    <div id="progress" class="progress"></div>
+    <div id="bigword" class="bigword">…</div>
+    <div id="mic" class="mic">🎤</div>
+    <div id="quizStatus" class="status">Натисни микрофона и кажи значенията</div>
+    <div id="heard" class="heard"></div>
+    <div id="quizFeedback" class="feedback"></div>
+    <button id="recBtn">🎤 Кажи отговора</button>
+    <button id="repeatBtn" class="ghost">🔁 Повтори думата</button>
+  </div>
+
+  <!-- STEP 4: translation -->
+  <div id="translate" class="card hidden">
+    <h2 style="font-size:18px;margin:0 0 6px">Преведи изречението на английски 🌍</h2>
+    <div id="tProgress" class="progress"></div>
+    <div id="sentence" class="sent">…</div>
+    <div id="tMic" class="mic">🎤</div>
+    <div id="tStatus" class="status">Натисни микрофона и кажи превода на английски</div>
+    <div id="tHeard" class="heard"></div>
+    <div id="tFeedback" class="feedback"></div>
+    <button id="tRecBtn">🎤 Кажи превода</button>
+    <button id="tRepeatBtn" class="ghost">🔁 Повтори изречението</button>
+  </div>
+
+  <!-- DONE -->
+  <div id="done" class="card hidden" style="text-align:center">
+    <div style="font-size:56px">🎉</div>
+    <h2>Браво! Готова си!</h2>
+    <p style="color:var(--muted)">Справи се страхотно с всички думи.</p>
+    <button id="againBtn" class="green">Още веднъж с нови листове</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let files = [];
+let words = [];      // [{english, meanings[], warnings[]}]
+let queue = [];      // remaining english words to test (re-queued if wrong)
+let current = null;
+let sentences = [];
+let sIndex = 0;
+
+// ---- audio helpers ----
+async function speak(text, voice) {
+  try {
+    const r = await fetch('/api/tts', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ text, voice })
+    });
+    if (!r.ok) return;
+    const blob = await r.blob();
+    const audio = new Audio(URL.createObjectURL(blob));
+    await audio.play().catch(()=>{});
+    return new Promise(res => { audio.onended = res; audio.onerror = res; });
+  } catch(e){}
+}
+
+let mediaRecorder, chunks = [], stream;
+async function ensureMic() {
+  if (!stream) stream = await navigator.mediaDevices.getUserMedia({ audio:true });
+  return stream;
+}
+function startRec() {
+  chunks = [];
+  mediaRecorder = new MediaRecorder(stream);
+  mediaRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+  mediaRecorder.start();
+}
+function stopRec() {
+  return new Promise(res => {
+    mediaRecorder.onstop = () => res(new Blob(chunks, { type:'audio/webm' }));
+    mediaRecorder.stop();
+  });
+}
+async function transcribe(blob, lang) {
+  const fd = new FormData();
+  fd.append('audio', blob, 'answer.webm');
+  fd.append('lang', lang);
+  const r = await fetch('/api/stt', { method:'POST', body: fd });
+  const j = await r.json();
+  return (j.text || '').trim();
+}
+
+// "I didn't hear you" detection (Bulgarian + English variants)
+function saidRepeat(text) {
+  const t = text.toLowerCase();
+  return /не (те )?чух|не чувам|повтори|repeat|didn'?t hear|can'?t hear|again/.test(t);
+}
+
+// ---- STEP 1: upload ----
+$('fileInput').addEventListener('change', (e) => {
+  files = Array.from(e.target.files);
+  $('thumbs').innerHTML = '';
+  files.forEach(f => {
+    const img = document.createElement('img');
+    img.src = URL.createObjectURL(f);
+    $('thumbs').appendChild(img);
+  });
+  $('ocrBtn').disabled = files.length === 0;
+});
+
+$('ocrBtn').addEventListener('click', async () => {
+  if (!files.length) return;
+  $('ocrBtn').disabled = true;
+  $('uploadStatus').innerHTML = '<div class="spinner"></div>Чета листовете…';
+  try {
+    const fd = new FormData();
+    files.forEach(f => fd.append('photos', f));
+    const r = await fetch('/api/ocr', { method:'POST', body: fd });
+    const j = await r.json();
+    if (j.error || !j.words?.length) throw new Error(j.error || 'Не намерих думи.');
+    words = j.words;
+    showReview();
+  } catch (err) {
+    $('uploadStatus').textContent = 'Грешка: ' + err.message;
+    $('ocrBtn').disabled = false;
+  }
+});
+
+// ---- STEP 2: review ----
+function showReview() {
+  $('upload').classList.add('hidden');
+  $('review').classList.remove('hidden');
+  const warned = words.filter(w => w.warnings?.length);
+  const banner = $('warnBanner');
+  if (warned.length) {
+    banner.classList.remove('hidden');
+    banner.textContent = '⚠️ Има ' + warned.length + ' думи с възможни грешки (маркирани по-долу).';
+  } else banner.classList.add('hidden');
+
+  $('wordList').innerHTML = words.map(w => `
+    <div class="word-row">
+      <div>
+        <div class="en">${escapeHtml(w.english)}${w.warnings?.length?'<span class="badge">?</span>':''}</div>
+        <div class="bg">${w.meanings.map(escapeHtml).join(', ')}</div>
+        ${(w.warnings||[]).map(x=>`<div class="warn">⚠️ ${escapeHtml(x)}</div>`).join('')}
+      </div>
+    </div>`).join('');
+}
+function escapeHtml(s){return String(s).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+$('restartBtn').addEventListener('click', () => location.reload());
+$('againBtn').addEventListener('click', () => location.reload());
+
+// ---- STEP 3: quiz ----
+$('readyBtn').addEventListener('click', async () => {
+  await ensureMic();                       // unlock mic + audio via user gesture
+  $('review').classList.add('hidden');
+  $('quiz').classList.remove('hidden');
+  queue = shuffle(words.map(w => w.english));
+  await speak('Great! Let us begin.');
+  nextWord();
+});
+
+function shuffle(a){a=a.slice();for(let i=a.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[a[i],a[j]]=[a[j],a[i]];}return a;}
+
+async function nextWord() {
+  $('quizFeedback').textContent = '';
+  $('heard').textContent = '';
+  if (!queue.length) return startTranslation();
+  const en = queue[0];
+  current = words.find(w => w.english === en);
+  $('progress').textContent = 'Остават ' + queue.length + ' думи';
+  $('bigword').textContent = en;
+  $('quizStatus').textContent = 'Слушай…';
+  await speak(en, 'nova');
+  $('quizStatus').textContent = 'Кажи значенията на български';
+}
+
+$('repeatBtn').addEventListener('click', () => { if (current) speak(current.english, 'nova'); });
+
+let recording = false;
+$('recBtn').addEventListener('click', async () => {
+  if (!current) return;
+  if (!recording) {
+    startRec(); recording = true;
+    $('mic').classList.add('rec');
+    $('recBtn').textContent = '⏹ Спри и провери';
+    $('quizStatus').textContent = 'Слушам те…';
+  } else {
+    recording = false;
+    $('mic').classList.remove('rec');
+    $('recBtn').textContent = '🎤 Кажи отговора';
+    $('recBtn').disabled = true;
+    $('quizStatus').innerHTML = '<div class="spinner"></div>';
+    const blob = await stopRec();
+    const said = await transcribe(blob, 'bg');
+    $('heard').textContent = said ? '„' + said + '“' : '';
+    if (!said || saidRepeat(said)) {
+      $('quizStatus').textContent = 'Повтарям думата…';
+      $('recBtn').disabled = false;
+      await speak(current.english, 'nova');
+      $('quizStatus').textContent = 'Кажи значенията на български';
+      return;
+    }
+    await evaluateWord(said);
+    $('recBtn').disabled = false;
+  }
+});
+
+async function evaluateWord(said) {
+  $('quizStatus').textContent = 'Проверявам…';
+  const r = await fetch('/api/check', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ english: current.english, meanings: current.meanings, answer: said })
+  });
+  const j = await r.json();
+  if (j.status === 'correct') {
+    $('quizFeedback').innerHTML = '<span class="ok">✅ ' + escapeHtml(j.feedback || 'Браво!') + '</span>';
+    queue.shift();
+    await speak(j.feedback || 'Well done!');
+    $('quizStatus').textContent = '';
+    setTimeout(nextWord, 700);
+  } else {
+    let msg = j.feedback || 'Опитай пак.';
+    if (j.missed?.length) msg += ' Пропусна: ' + j.missed.join(', ') + '.';
+    $('quizFeedback').innerHTML = '<span class="bad">❌ ' + escapeHtml(msg) + '</span>';
+    // keep the word in the queue, move it a few places back
+    queue.shift(); queue.splice(Math.min(2, queue.length), 0, current.english);
+    await speak(msg);
+    $('quizStatus').textContent = 'Ще я повторим по-късно. Продължаваме…';
+    setTimeout(nextWord, 900);
+  }
+}
+
+// ---- STEP 4: translation ----
+async function startTranslation() {
+  $('quiz').classList.add('hidden');
+  $('translate').classList.remove('hidden');
+  $('tStatus').innerHTML = '<div class="spinner"></div>Подготвям изречения…';
+  await speak('Excellent! Now translate some sentences.');
+  const r = await fetch('/api/sentences', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ words: words.map(w=>w.english), count: 5 })
+  });
+  const j = await r.json();
+  sentences = j.sentences || [];
+  sIndex = 0;
+  if (!sentences.length) return finish();
+  showSentence();
+}
+
+async function showSentence() {
+  $('tFeedback').textContent = ''; $('tHeard').textContent = '';
+  const s = sentences[sIndex];
+  $('tProgress').textContent = 'Изречение ' + (sIndex+1) + ' от ' + sentences.length;
+  $('sentence').textContent = s.bg;
+  $('tStatus').textContent = 'Преведи на английски и го кажи';
+}
+
+$('tRepeatBtn').addEventListener('click', () => {
+  const s = sentences[sIndex]; if (s) $('sentence').textContent = s.bg;
+});
+
+let tRecording = false;
+$('tRecBtn').addEventListener('click', async () => {
+  if (!tRecording) {
+    startRec(); tRecording = true;
+    $('tMic').classList.add('rec');
+    $('tRecBtn').textContent = '⏹ Спри и провери';
+    $('tStatus').textContent = 'Слушам те…';
+  } else {
+    tRecording = false;
+    $('tMic').classList.remove('rec');
+    $('tRecBtn').textContent = '🎤 Кажи превода';
+    $('tRecBtn').disabled = true;
+    $('tStatus').innerHTML = '<div class="spinner"></div>';
+    const blob = await stopRec();
+    const said = await transcribe(blob, 'en');
+    $('tHeard').textContent = said ? '„' + said + '“' : '';
+    if (!said || saidRepeat(said)) {
+      $('tStatus').textContent = 'Кажи превода на английски';
+      $('tRecBtn').disabled = false; return;
+    }
+    const s = sentences[sIndex];
+    const r = await fetch('/api/check-translation', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ bg: s.bg, answer: said })
+    });
+    const j = await r.json();
+    if (j.status === 'correct') {
+      $('tFeedback').innerHTML = '<span class="ok">✅ ' + escapeHtml(j.feedback||'Браво!') + '</span>';
+      await speak(j.feedback || 'Great job!');
+      sIndex++;
+      $('tRecBtn').disabled = false;
+      if (sIndex >= sentences.length) return finish();
+      setTimeout(showSentence, 700);
+    } else {
+      const corr = j.correctTranslation ? ' Правилно: „' + j.correctTranslation + '“.' : '';
+      $('tFeedback').innerHTML = '<span class="bad">❌ ' + escapeHtml((j.feedback||'') + corr) + '</span>';
+      await speak((j.feedback||'') + (j.correctTranslation ? ' The correct translation is: ' + j.correctTranslation : ''));
+      $('tStatus').textContent = 'Опитай пак или продължи';
+      $('tRecBtn').disabled = false;
+    }
+  }
+});
+
+function finish() {
+  $('translate').classList.add('hidden');
+  $('done').classList.remove('hidden');
+  speak('Congratulations! You finished. Great work!');
+}
+</script>
+</body>
+</html>
