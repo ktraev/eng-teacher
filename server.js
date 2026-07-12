@@ -23,6 +23,8 @@ if (!OPENAI_API_KEY) {
   process.exit(1);
 }
 
+// Keep the SDK's own defaults (10-minute timeout). Shortening this caused the SDK to
+// abort slow vision calls mid-response, which surfaced as "Premature close".
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -49,16 +51,23 @@ function parseJson(text) {
 // ---------------------------------------------------------------------------
 // 1. OCR + validation of the photographed word lists
 // ---------------------------------------------------------------------------
-app.post('/api/ocr', upload.array('photos', 8), async (req, res) => {
-  try {
-    if (!req.files?.length) return res.status(400).json({ error: 'No photos uploaded.' });
+const uploadPhotos = upload.array('photos', 12);
 
-    const imageParts = req.files.map((f) => ({
-      type: 'image_url',
-      image_url: { url: `data:${f.mimetype};base64,${f.buffer.toString('base64')}`, detail: 'high' },
-    }));
+app.post('/api/ocr', (req, res) => {
+  // handle upload errors (too big / too many) as clean JSON instead of crashing
+  uploadPhotos(req, res, (uploadErr) => {
+    if (uploadErr) {
+      console.error('Upload error:', uploadErr.message);
+      return res.status(400).json({ error: 'Проблем при качването на снимките: ' + uploadErr.message });
+    }
+    handleOcr(req, res).catch((err) => {
+      console.error('OCR error:', err.message);
+      if (!res.headersSent) res.status(500).json({ error: 'Не можах да прочета снимките. ' + err.message });
+    });
+  });
+});
 
-    const system = `You read photos of a child's English-vocabulary study sheets.
+const OCR_SYSTEM = `You read photos of a child's English-vocabulary study sheets.
 Each sheet lists English words with their Bulgarian translation(s).
 For every entry you find:
 1. Read the English word and every Bulgarian meaning written next to it.
@@ -72,36 +81,94 @@ Return STRICT JSON only, no prose, in this exact shape:
 }
 "warnings" is an array (empty [] if the entry is fine). Merge duplicate English words into one entry. Keep meanings deduplicated.`;
 
+// OCR a SINGLE page at a time (one request per photo) and retry on failure.
+// Splitting the pages keeps each request small; a failing page no longer loses the others.
+async function ocrOnePage(file, attempt = 1) {
+  const MAX_ATTEMPTS = 3;
+  try {
+    // Same request shape as the version that worked — plain call, no streaming.
     const resp = await openai.chat.completions.create({
       model: OCR_MODEL,
       temperature: 0,
       messages: [
-        { role: 'system', content: system },
+        { role: 'system', content: OCR_SYSTEM },
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Here are the photo(s) of the vocabulary sheet(s). Extract and validate every word.' },
-            ...imageParts,
+            { type: 'text', text: 'Extract and validate every word on this page.' },
+            { type: 'image_url',
+              image_url: { url: `data:${file.mimetype};base64,${file.buffer.toString('base64')}`, detail: 'high' } },
           ],
         },
       ],
     });
 
     const data = parseJson(resp.choices[0].message.content);
-    const words = (data.words || [])
+    return (data.words || [])
       .filter((w) => w.english && Array.isArray(w.meanings) && w.meanings.length)
       .map((w) => ({
         english: String(w.english).trim(),
         meanings: w.meanings.map((m) => String(m).trim()).filter(Boolean),
         warnings: Array.isArray(w.warnings) ? w.warnings.filter(Boolean) : [],
       }));
-
-    res.json({ words });
   } catch (err) {
-    console.error('OCR error:', err.message);
-    res.status(500).json({ error: 'Could not read the photos. ' + err.message });
+    if (attempt < MAX_ATTEMPTS) {
+      console.warn(`  retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS}) after: ${err.message}`);
+      await new Promise((r) => setTimeout(r, 1500 * attempt));
+      return ocrOnePage(file, attempt + 1);
+    }
+    throw err;
   }
-});
+}
+
+async function handleOcr(req, res) {
+  if (!req.files?.length) return res.status(400).json({ error: 'No photos uploaded.' });
+
+  const merged = new Map();   // key: lowercase english -> word entry
+  const failedPages = [];
+  const errors = [];
+
+  for (let i = 0; i < req.files.length; i++) {
+    const f = req.files[i];
+    console.log(`OCR page ${i + 1}/${req.files.length} — ${f.mimetype}, ${Math.round(f.size / 1024)} KB, model=${OCR_MODEL}`);
+    try {
+      const words = await ocrOnePage(f);
+      for (const w of words) {
+        const key = w.english.toLowerCase();
+        if (merged.has(key)) {
+          const prev = merged.get(key);
+          prev.meanings = [...new Set([...prev.meanings, ...w.meanings])];
+          prev.warnings = [...new Set([...prev.warnings, ...w.warnings])];
+        } else {
+          merged.set(key, { ...w });
+        }
+      }
+      console.log(`  -> ${words.length} words`);
+    } catch (err) {
+      const detail = err?.status ? `${err.status} ${err.message}` : err.message;
+      console.error(`  -> FAILED page ${i + 1}: ${detail}`);
+      failedPages.push(i + 1);
+      errors.push(detail);
+    }
+  }
+
+  const words = [...merged.values()];
+  if (!words.length) {
+    // show the real reason instead of a generic message
+    return res.status(500).json({
+      error: 'Не можах да прочета нито една снимка. Причина: ' + (errors[0] || 'неизвестна'),
+      details: errors,
+    });
+  }
+  // Partial success is still useful — return what we got, and say what failed.
+  res.json({
+    words,
+    failedPages,
+    note: failedPages.length
+      ? `Страници ${failedPages.join(', ')} не можаха да се прочетат — добави тези думи ръчно или опитай пак.`
+      : '',
+  });
+}
 
 // ---------------------------------------------------------------------------
 // 2. Text to speech (speak the English word / the Bulgarian feedback)
@@ -303,6 +370,10 @@ app.delete('/api/folders/:id', async (req, res) => {
   try { await deleteFolder(req.params.id); res.json({ ok: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// Never let one bad request take the whole server down (and with it, folder saving).
+process.on('unhandledRejection', (err) => console.error('Unhandled rejection:', err));
+process.on('uncaughtException', (err) => console.error('Uncaught exception:', err));
 
 app.listen(PORT, () => {
   console.log(`\n  English teacher running at http://localhost:${PORT}\n`);

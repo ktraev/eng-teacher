@@ -12,7 +12,18 @@ A voice vocabulary tutor for a Bulgarian-speaking child, powered by OpenAI.
 
 Everything is turn-based: **OpenAI TTS** speaks, the mic records, **Whisper** transcribes, **GPT-4o** judges. Your API key stays on the server — never on the phone.
 
-**Folders are stored in a local database file on your computer** — `data/folders.json` next to the app (change the location with `DATA_DIR` in `.env`). This persists across restarts and is served to any device that opens the app, so it doesn't depend on the browser. The first time the app loads, any folders previously saved in your browser are automatically imported into this file. Back up the `data` folder to keep your word sets safe.
+**Folders are stored in a database.** If `DATABASE_URL` is set the app uses Postgres (Supabase/Neon/Render Postgres) — this is what you want when hosting on Render, because Render's own disk is wiped on every restart. If `DATABASE_URL` is not set, folders fall back to a local file (`data/folders.json`) on your computer, which is fine for running it locally.
+
+The folders screen also has **⬇︎ Резервно копие / ⬆︎ Възстанови** buttons to export all your word sets to a file and restore them later.
+
+## Using Supabase (recommended for Render)
+
+1. In Supabase: **Project Settings → Database → Connection string → URI**. Pick the **Session pooler** string (IPv4-friendly, works from Render) and substitute your real password.
+2. In Render: **your service → Environment → Add Environment Variable**
+   - `DATABASE_URL` = that connection string
+   - `OPENAI_API_KEY` = your OpenAI key
+3. Deploy. On start the app creates its `folders` table automatically — no SQL to run.
+4. Open the app and use **⬆︎ Възстанови** to import a backup file if you have one.
 
 ---
 

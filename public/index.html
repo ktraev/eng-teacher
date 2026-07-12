@@ -79,6 +79,19 @@
   .opt.correct { border-color:var(--accent2); background:#052e16; }
   .opt.wrongsel { border-color:var(--err); background:#3b0a0a; }
   .opt.disabled { pointer-events:none; }
+
+  /* delete confirmation + undo */
+  .modal { position:fixed; inset:0; background:rgba(0,0,0,.72); display:flex; align-items:center;
+           justify-content:center; padding:20px; z-index:50; }
+  .modal-box { background:var(--card); border-radius:18px; padding:24px; max-width:400px; width:100%;
+               text-align:center; box-shadow:0 10px 40px rgba(0,0,0,.5); }
+  .modal-box p { color:var(--muted); line-height:1.5; font-size:15px; }
+  button.outline-danger { background:transparent; border:2px solid var(--err); color:var(--err); }
+  .toast { position:fixed; left:16px; right:16px; bottom:18px; max-width:520px; margin:0 auto;
+           background:#334155; border-radius:13px; padding:10px 12px; display:flex; align-items:center;
+           gap:10px; justify-content:space-between; z-index:60; box-shadow:0 8px 24px rgba(0,0,0,.45); }
+  .toast span { font-size:14px; }
+  .toast button { width:auto; margin:0; padding:8px 12px; font-size:14px; }
 </style>
 </head>
 <body>
@@ -91,6 +104,12 @@
     <div id="folderList"></div>
     <div id="emptyFolders" class="status hidden">Още няма папки. Създай първата!</div>
     <button id="newFolderBtn" class="green">＋ Нова папка</button>
+    <div class="row-btns" style="margin-top:10px">
+      <button id="exportBtn" class="ghost">⬇︎ Резервно копие</button>
+      <button id="importBtn" class="ghost">⬆︎ Възстанови</button>
+    </div>
+    <input id="importInput" type="file" accept=".json,application/json" />
+    <div id="backupStatus" class="status"></div>
   </div>
 
   <!-- ============ SCREEN 1b: EDITOR (upload + edit + save) ============ -->
@@ -113,6 +132,7 @@
     </div>
     <button id="saveFolderBtn" class="green">💾 Запази папката</button>
     <div id="saveStatus" class="status"></div>
+    <button id="deleteFolderBtn" class="outline-danger hidden" style="margin-top:22px">🗑️ Изтрий тази папка</button>
   </div>
 
   <!-- ============ SCREEN 2: QUIZ ============ -->
@@ -159,6 +179,23 @@
     <div id="doneScore" class="status"></div>
     <button id="doneHomeBtn" class="green">Обратно към папките</button>
   </div>
+</div>
+
+<!-- delete confirmation -->
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <div style="font-size:42px">⚠️</div>
+    <h2>Изтриване на папка</h2>
+    <p id="modalText"></p>
+    <button id="modalCancel" class="green">Отказ — запази папката</button>
+    <button id="modalConfirm" class="outline-danger">Да, изтрий</button>
+  </div>
+</div>
+
+<!-- undo toast -->
+<div id="toast" class="toast hidden">
+  <span id="toastText"></span>
+  <button id="undoBtn" class="ghost">↩︎ Отмени</button>
 </div>
 
 <script>
@@ -217,23 +254,106 @@ function renderFolders(){
       </div>
       ${scoreBadge(f)}
       <button class="icon-btn" onclick="editFolder('${f.id}')" title="Редактирай">✏️</button>
-      <button class="icon-btn" onclick="deleteFolder('${f.id}')" title="Изтрий">🗑️</button>
     </div>`).join('');
 }
 $('newFolderBtn').addEventListener('click', () => openEditor(null));
 $('doneHomeBtn').addEventListener('click', goHome);
 
-async function deleteFolder(id){
-  const f = folders.find(x => x.id === id);
-  if (!f) return;
-  if (!confirm('Да изтрия папка „' + f.name + '“?')) return;
-  try {
-    await apiDelete(id);
-    folders = folders.filter(x => x.id !== id);
-    renderFolders();
-  } catch (e) { alert('Грешка при изтриване: ' + e.message); }
-}
 function editFolder(id){ const f = folders.find(x => x.id === id); if (f) openEditor(f); }
+
+// ---- backup: export all folders to a file / restore from one ----
+$('exportBtn').addEventListener('click', async () => {
+  try {
+    await apiGet();
+    if (!folders.length) { $('backupStatus').textContent = 'Няма папки за запазване.'; return; }
+    const blob = new Blob([JSON.stringify(folders, null, 2)], { type:'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'english-teacher-backup-' + new Date().toISOString().slice(0,10) + '.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+    $('backupStatus').textContent = '✅ Запазени ' + folders.length + ' папки на компютъра.';
+  } catch (e) { $('backupStatus').textContent = 'Грешка: ' + e.message; }
+});
+
+$('importBtn').addEventListener('click', () => $('importInput').click());
+$('importInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  $('backupStatus').innerHTML = '<div class="spinner"></div>Възстановявам…';
+  try {
+    let parsed = JSON.parse(await file.text());
+    if (!Array.isArray(parsed)) parsed = parsed.folders || [];
+    const valid = parsed
+      .filter(f => f && f.name && Array.isArray(f.words))
+      .map(f => ({
+        name: String(f.name),
+        lastScore: f.lastScore || null,
+        words: f.words.filter(w => w && w.english && Array.isArray(w.meanings) && w.meanings.length),
+      }))
+      .filter(f => f.words.length);
+    if (!valid.length) throw new Error('Файлът не съдържа папки с думи.');
+    let added = 0, skipped = 0;
+    for (const f of valid) {
+      if (folders.some(x => x.name === f.name)) { skipped++; continue; }   // never overwrite
+      let created = await apiCreate(f.name, f.words);
+      if (f.lastScore) created = await apiUpdate(created.id, { lastScore: f.lastScore });
+      folders.unshift(created);
+      added++;
+    }
+    renderFolders();
+    $('backupStatus').textContent = '✅ Добавени ' + added + ' папки' +
+      (skipped ? ' · пропуснати ' + skipped + ' (вече съществуват)' : '') + '.';
+  } catch (err) {
+    $('backupStatus').textContent = 'Грешка: ' + err.message;
+  }
+  $('importInput').value = '';
+});
+
+// ---- guarded delete: only from inside the editor, with confirmation + undo ----
+let pendingDelete = null;   // folder awaiting confirmation
+let lastDeleted = null;     // kept briefly so it can be restored
+let toastTimer = null;
+
+$('deleteFolderBtn').addEventListener('click', () => {
+  const f = folders.find(x => x.id === editingId);
+  if (!f) return;
+  pendingDelete = f;
+  $('modalText').innerHTML = 'Наистина ли да изтрия <b>„' + escapeHtml(f.name) + '“</b> с ' +
+    f.words.length + ' думи?<br><br>Ще имаш малко време да отмениш.';
+  $('modal').classList.remove('hidden');
+});
+$('modalCancel').addEventListener('click', () => { pendingDelete = null; $('modal').classList.add('hidden'); });
+$('modalConfirm').addEventListener('click', async () => {
+  if (!pendingDelete) return;
+  const f = pendingDelete; pendingDelete = null;
+  $('modal').classList.add('hidden');
+  try {
+    await apiDelete(f.id);
+    folders = folders.filter(x => x.id !== f.id);
+    lastDeleted = { name: f.name, words: f.words, lastScore: f.lastScore };
+    goHome();
+    showToast('Папката „' + f.name + '“ е изтрита.');
+  } catch (e) { alert('Грешка при изтриване: ' + e.message); }
+});
+
+function showToast(text){
+  $('toastText').textContent = text;
+  $('toast').classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { $('toast').classList.add('hidden'); lastDeleted = null; }, 12000);
+}
+$('undoBtn').addEventListener('click', async () => {
+  if (!lastDeleted) return;
+  const d = lastDeleted; lastDeleted = null;
+  clearTimeout(toastTimer); $('toast').classList.add('hidden');
+  try {
+    let f = await apiCreate(d.name, d.words);
+    if (d.lastScore) f = await apiUpdate(f.id, { lastScore: d.lastScore });
+    folders.unshift(f);
+    renderFolders();
+  } catch (e) { alert('Грешка при връщане: ' + e.message); }
+});
 
 // ================= SCREEN 1b: EDITOR =================
 let editRows = [];      // [{english, meanings:[], warnings:[]}]
@@ -252,6 +372,7 @@ function openEditor(folder){
   $('saveStatus').textContent = '';
   $('fileInput').value = '';
   $('ocrBtn').disabled = true;
+  $('deleteFolderBtn').classList.toggle('hidden', !folder);   // only for existing folders
   if (!editRows.length) editRows.push({ english:'', meanings:[], warnings:[] });
   renderRows();
   showScreen('editorScreen');
@@ -267,10 +388,10 @@ $('fileInput').addEventListener('change', (e) => {
 $('ocrBtn').addEventListener('click', async () => {
   if (!editFiles.length) return;
   $('ocrBtn').disabled = true;
-  $('ocrStatus').innerHTML = '<div class="spinner"></div>Чета ' + editFiles.length + ' снимки…';
   try {
     const fd = new FormData();
-    editFiles.forEach(f => fd.append('photos', f));
+    editFiles.forEach(f => fd.append('photos', f));   // send the originals, as before
+    $('ocrStatus').innerHTML = '<div class="spinner"></div>Чета ' + editFiles.length + ' снимки…';
     const r = await fetch('/api/ocr', { method:'POST', body: fd });
     const j = await r.json();
     if (j.error) throw new Error(j.error);
@@ -281,7 +402,9 @@ $('ocrBtn').addEventListener('click', async () => {
     if (!editRows.length) editRows.push({ english:'', meanings:[], warnings:[] });
     renderRows();
     const warned = (j.words || []).filter(w => w.warnings && w.warnings.length).length;
-    $('ocrStatus').textContent = 'Добавих ' + (j.words||[]).length + ' думи' + (warned ? ' (⚠️ ' + warned + ' с възможни грешки)' : '') + '. Провери и редактирай.';
+    let msg = 'Добавих ' + (j.words||[]).length + ' думи' + (warned ? ' (⚠️ ' + warned + ' с възможни грешки)' : '') + '. Провери и редактирай.';
+    if (j.note) msg = '⚠️ ' + j.note + ' ' + msg;
+    $('ocrStatus').textContent = msg;
   } catch (err) {
     $('ocrStatus').textContent = 'Грешка: ' + err.message;
   }
@@ -615,15 +738,18 @@ async function migrateLocal(){
   let old = null;
   try { old = JSON.parse(localStorage.getItem('et_folders_v1')); } catch {}
   if (!Array.isArray(old) || !old.length) return;
-  for (const f of old) {
-    if (f && f.name && Array.isArray(f.words) && f.words.length) {
-      try {
-        const created = await apiCreate(f.name, f.words);
-        if (f.lastScore) await apiUpdate(created.id, { lastScore: f.lastScore });
-      } catch (e) { console.error('migrate', e); }
-    }
+  const valid = old.filter(f => f && f.name && Array.isArray(f.words) && f.words.length);
+  let saved = 0;
+  for (const f of valid) {
+    try {
+      const created = await apiCreate(f.name, f.words);
+      if (f.lastScore) await apiUpdate(created.id, { lastScore: f.lastScore });
+      saved++;
+    } catch (e) { console.error('migration failed for', f.name, e); }
   }
-  localStorage.removeItem('et_folders_v1');   // so it only migrates once
+  // Only drop the browser's copy once EVERY folder is safely in the database.
+  if (saved > 0 && saved === valid.length) localStorage.removeItem('et_folders_v1');
+  else console.warn('Migration incomplete — keeping the browser backup as a safety net.');
 }
 
 // ---------------- boot ----------------
