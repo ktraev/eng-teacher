@@ -51,10 +51,16 @@ async function postgresBackend(connectionString) {
     console.log(`  Database: Postgres (persistent) @ ${host}`);
   } catch (err) {
     // Don't crash-loop the whole app over a bad connection string — stay up and complain.
+    // Show the SHAPE of the value (password masked) so a malformed URL is obvious.
+    const masked = connectionString.replace(/(:\/\/[^:@/]*:)[^@]*(@)/, '$1***$2');
     console.error('\n  ✗ DATABASE ERROR — could not connect to Postgres.');
     console.error(`    Parsed host: "${host}"`);
     console.error(`    Reason: ${err.message}`);
-    console.error('    Check the DATABASE_URL env var. It must look like:');
+    console.error(`    DATABASE_URL seen: ${JSON.stringify(masked)}`);
+    console.error(`    length=${connectionString.length}` +
+      ` startsWithScheme=${/^postgres(ql)?:\/\//.test(connectionString)}` +
+      ` hasWhitespace=${/\s/.test(connectionString)}`);
+    console.error('    It must be ONLY the URL, e.g.:');
     console.error('    postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require');
     console.error('    (URL-encode any @ # / : ? & in the password.)\n');
   }
