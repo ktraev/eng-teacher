@@ -27,23 +27,37 @@ export const deleteFolder = (id)        => backend.remove(id);
 // ---------------------------------------------------------------------------
 async function postgresBackend(connectionString) {
   const { default: pg } = await import('pg');
+
+  // Show what we actually parsed (never the password) so a bad URL is obvious.
+  let host = '(could not parse)';
+  try { host = new URL(connectionString).hostname; } catch {}
+
   const pool = new pg.Pool({
     connectionString,
     ssl: { rejectUnauthorized: false },   // hosted Postgres requires SSL
     max: 5,
   });
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS folders (
-      id         TEXT PRIMARY KEY,
-      name       TEXT   NOT NULL,
-      words      JSONB  NOT NULL,
-      last_score JSONB,
-      created_at BIGINT NOT NULL,
-      updated_at BIGINT NOT NULL
-    )`);
-
-  console.log('  Database: Postgres (persistent)');
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS folders (
+        id         TEXT PRIMARY KEY,
+        name       TEXT   NOT NULL,
+        words      JSONB  NOT NULL,
+        last_score JSONB,
+        created_at BIGINT NOT NULL,
+        updated_at BIGINT NOT NULL
+      )`);
+    console.log(`  Database: Postgres (persistent) @ ${host}`);
+  } catch (err) {
+    // Don't crash-loop the whole app over a bad connection string — stay up and complain.
+    console.error('\n  ✗ DATABASE ERROR — could not connect to Postgres.');
+    console.error(`    Parsed host: "${host}"`);
+    console.error(`    Reason: ${err.message}`);
+    console.error('    Check the DATABASE_URL env var. It must look like:');
+    console.error('    postgresql://USER:PASSWORD@HOST.neon.tech/DBNAME?sslmode=require');
+    console.error('    (URL-encode any @ # / : ? & in the password.)\n');
+  }
 
   const asJson = (v) => (typeof v === 'string' ? JSON.parse(v) : v);
   const toFolder = (r) => ({
