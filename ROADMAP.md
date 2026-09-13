@@ -44,7 +44,8 @@ Goal: make the current app solid, multi-user, and safe to put in a stranger's ha
 
 Goal: make it genuinely better at *teaching*, so people want to return daily. This is the most important phase.
 
-- **Spaced repetition (SRS).** Track every word per user with a review schedule (start with a proven algorithm like SM-2 / the FSRS approach). Each day the app surfaces the words due for review. This single feature is what turns a quiz into a habit.
+- ✅ **Word history + configurable sessions (landed early).** Every word now tracks times seen / correct / wrong / last practiced. Sessions are configurable: choose the number of words (or all) and the source — one folder, several, or all. A single folder is served in **batches by least-recently-practiced**, so repeat sessions continue with the words you haven't done rather than the same ones. Mixed sessions are **error-weighted** — the words you miss most appear more often, with already-known words still stirred in. Words with more than 3 meanings are shown mostly as multiple choice. This is the data foundation the full review schedule builds on.
+- **Spaced repetition (SRS).** Build on that word history with a review schedule (start with a proven algorithm like SM-2 / the FSRS approach). Each day the app surfaces the words due for review. This single feature is what turns a quiz into a habit.
 - **A daily "review" home screen:** "You have 24 words to review today" — the hook that brings people back.
 - **Pronunciation & speaking practice** using the voice infrastructure you already built (word → she says it → feedback), as an optional mode.
 - **Better answer modes mix:** keep the tap/type split, add "reveal & self-rate" (how Anki works) for fast review sessions.

@@ -100,6 +100,13 @@
   .topbar { display:flex; justify-content:flex-end; margin-bottom:8px; }
   .topbar .who { flex:1; color:var(--muted); font-size:13px; align-self:center; }
   .topbar button { width:auto; margin:0; padding:7px 12px; font-size:13px; }
+
+  /* session setup */
+  .srow { display:flex; align-items:center; gap:9px; padding:9px 2px; font-size:15px; cursor:pointer; }
+  .srow input { width:18px; height:18px; flex:0 0 auto; }
+  .countrow { display:flex; align-items:center; gap:16px; }
+  .muted { color:var(--muted); font-size:13px; }
+  #folderChecks { margin-top:4px; padding-left:8px; border-left:2px solid #334155; }
 </style>
 </head>
 <body>
@@ -126,6 +133,7 @@
     <h2>Папки с думи</h2>
     <div id="folderList"></div>
     <div id="emptyFolders" class="status hidden">Още няма папки. Създай първата!</div>
+    <button id="mixedBtn" class="ghost hidden">🎯 Смесено упражнение</button>
     <button id="newFolderBtn" class="green">＋ Нова папка</button>
     <div class="row-btns" style="margin-top:10px">
       <button id="exportBtn" class="ghost">⬇︎ Резервно копие</button>
@@ -156,6 +164,28 @@
     <button id="saveFolderBtn" class="green">💾 Запази папката</button>
     <div id="saveStatus" class="status"></div>
     <button id="deleteFolderBtn" class="outline-danger hidden" style="margin-top:22px">🗑️ Изтрий тази папка</button>
+  </div>
+
+  <!-- ============ SESSION SETUP ============ -->
+  <div id="setupScreen" class="card hidden">
+    <span class="backlink" onclick="goHome()">← Назад</span>
+    <h2>Настрой упражнението</h2>
+
+    <div class="hint" style="text-align:left">Откъде да са думите?</div>
+    <label class="srow"><input type="radio" name="src" value="folder" checked> Само тази папка <span id="srcFolderName" class="muted"></span></label>
+    <label class="srow"><input type="radio" name="src" value="several"> Няколко папки</label>
+    <label class="srow"><input type="radio" name="src" value="all"> Всички папки</label>
+    <div id="folderChecks" class="hidden"></div>
+
+    <div class="hint" style="text-align:left;margin-top:14px">Колко думи в тази сесия?</div>
+    <div class="countrow">
+      <input id="countInput" class="txt" type="number" min="1" value="20" style="max-width:120px" />
+      <label class="srow" style="margin:0"><input type="checkbox" id="countAll"> Всички</label>
+    </div>
+    <div class="muted" style="margin-top:6px">Следващия път ще продължи със следващите думи, не същите.</div>
+
+    <button id="startSessionBtn" class="green" style="margin-top:18px">▶ Започни</button>
+    <div id="setupStatus" class="status"></div>
   </div>
 
   <!-- ============ SCREEN 2: QUIZ ============ -->
@@ -253,7 +283,7 @@ async function apiDelete(id) {
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 // ---------------- screen switching ----------------
-const SCREENS = ['authScreen','foldersScreen','editorScreen','quizScreen','translateScreen','doneScreen'];
+const SCREENS = ['authScreen','foldersScreen','setupScreen','editorScreen','quizScreen','translateScreen','doneScreen'];
 function showScreen(id){ SCREENS.forEach(s => $(s).classList.toggle('hidden', s !== id)); window.scrollTo(0,0); }
 function goHome(){ renderFolders(); showScreen('foldersScreen'); }
 
@@ -268,9 +298,10 @@ function scoreBadge(f){
 function renderFolders(){
   const list = $('folderList');
   $('emptyFolders').classList.toggle('hidden', folders.length > 0);
+  $('mixedBtn').classList.toggle('hidden', folders.length < 2);   // mixing needs 2+ folders
   list.innerHTML = folders.map(f => `
     <div class="folder">
-      <div class="main" onclick="startExercise('${f.id}')">
+      <div class="main" onclick="openSetup('${f.id}')">
         <div class="fname">${escapeHtml(f.name)}</div>
         <div class="fmeta">${f.words.length} думи${f.lastScore ? ' · последно: ' + f.lastScore.errors + '/' + f.lastScore.total + ' грешки' : ''}</div>
       </div>
@@ -457,9 +488,17 @@ $('addRowBtn').addEventListener('click', addRow);
 $('saveFolderBtn').addEventListener('click', async () => {
   syncFromDom();
   const name = $('folderName').value.trim();
+  // preserve each word's practice history (stats) across edits, matched by english
+  const prev = editingId ? (folders.find(x => x.id === editingId)?.words || []) : [];
+  const statByEng = new Map(prev.map(w => [w.english, w.stats]));
   const words = editRows
     .filter(r => r.english.trim() && r.meanings.length)
-    .map(r => ({ english:r.english.trim(), meanings:r.meanings }));
+    .map(r => {
+      const w = { english:r.english.trim(), meanings:r.meanings };
+      const s = statByEng.get(w.english);
+      if (s) w.stats = s;
+      return w;
+    });
   if (!name) { $('saveStatus').textContent = 'Дай име на папката.'; return; }
   if (!words.length) { $('saveStatus').textContent = 'Добави поне една дума с превод.'; return; }
   $('saveFolderBtn').disabled = true;
@@ -535,8 +574,7 @@ function shuffle(a){ a=a.slice(); for(let i=a.length-1;i>0;i--){ const j=Math.ra
 // fallback distractors when the folder doesn't have enough other meanings
 const FILLER = ['куче','маса','вода','бял','голям','малък','ябълка','книга','щастлив',
                 'бърз','студен','топъл','нощ','ден','приятел','червен','зелен','къща'];
-let currentFolder = null;
-let quizWords = [];
+let quizWords = [];            // the word objects selected for THIS session (live refs)
 let queue = [];
 let wrongThisRound = [];
 let round = 1;
@@ -547,18 +585,139 @@ let mode = 'choice';
 let curOptions = [];
 let selectedSet = new Set();
 let locked = false;
+// session config / history
+let sessionFolderIds = new Set();
+let isSingleFolder = false;
+let singleFolderId = null;
+let answeredThisSession = new Set();
+let statsDirty = false;
+let setupFolderId = null;
 
-async function startExercise(id){
-  const f = folders.find(x => x.id === id);
-  if (!f) return;
-  currentFolder = f; quizWords = f.words;
+// ---- per-word history ----
+function ensureStats(w){ if (!w.stats) w.stats = { seen:0, correct:0, wrong:0, lastSeen:0 }; return w.stats; }
+function recordFirstAttempt(correct){
+  if (!current || answeredThisSession.has(current.english)) return;
+  answeredThisSession.add(current.english);
+  const s = ensureStats(current);
+  s.seen++; s.lastSeen = Date.now();
+  if (correct) s.correct++; else s.wrong++;
+  statsDirty = true;
+}
+async function flushStats(){
+  if (!statsDirty) return; statsDirty = false;
+  for (const id of sessionFolderIds) {
+    const f = folders.find(x => x.id === id);
+    if (!f) continue;
+    try { await apiUpdate(id, { words: f.words, lastScore: f.lastScore }); }
+    catch (e) { console.error('flush stats', e); }
+  }
+}
+
+// ---- word selection ----
+function wordWeight(w){
+  const s = w.stats;
+  if (!s || !s.seen) return 3;          // new words: introduce at moderate weight
+  return 1 + 4 * s.wrong;               // errors weighted up; known words keep base weight 1
+}
+function pickWeighted(pool, n){
+  const items = pool.slice(); const out = [];
+  n = Math.min(n, items.length);
+  for (let k = 0; k < n; k++){
+    let total = 0; for (const w of items) total += wordWeight(w);
+    let r = Math.random() * total, idx = items.length - 1;
+    for (let i = 0; i < items.length; i++){ r -= wordWeight(items[i]); if (r <= 0){ idx = i; break; } }
+    out.push(items.splice(idx, 1)[0]);
+  }
+  return out;
+}
+function pickByRecency(pool, n){        // least-recently-practiced first -> covers the folder in batches
+  const sorted = pool.slice().sort((a,b) => {
+    const la = (a.stats && a.stats.lastSeen) || 0, lb = (b.stats && b.stats.lastSeen) || 0;
+    return la !== lb ? la - lb : Math.random() - 0.5;
+  });
+  return sorted.slice(0, Math.min(n, sorted.length));
+}
+
+// ---- session setup screen ----
+function openSetup(folderId){
+  setupFolderId = folderId;
+  const folderRadio = document.querySelector('input[name=src][value=folder]');
+  if (folderId){
+    folderRadio.disabled = false; folderRadio.checked = true;
+    const f = folders.find(x => x.id === folderId);
+    $('srcFolderName').textContent = f ? '(' + f.name + ')' : '';
+  } else {
+    folderRadio.disabled = true; folderRadio.checked = false;
+    document.querySelector('input[name=src][value=all]').checked = true;
+    $('srcFolderName').textContent = '';
+  }
+  $('folderChecks').innerHTML = folders.map(f =>
+    '<label class="srow"><input type="checkbox" class="fchk" value="' + f.id + '"> ' +
+    escapeHtml(f.name) + ' <span class="muted">(' + f.words.length + ')</span></label>').join('');
+  $('setupStatus').textContent = '';
+  $('countAll').checked = false; $('countInput').disabled = false;
+  updateSourceUI();
+  showScreen('setupScreen');
+}
+function updateSourceUI(){
+  const src = document.querySelector('input[name=src]:checked').value;
+  $('folderChecks').classList.toggle('hidden', src !== 'several');
+}
+Array.from(document.getElementsByName('src')).forEach(r => r.addEventListener('change', updateSourceUI));
+$('countAll').addEventListener('change', () => { $('countInput').disabled = $('countAll').checked; });
+$('mixedBtn').addEventListener('click', () => openSetup(null));
+
+$('startSessionBtn').addEventListener('click', () => {
+  const src = document.querySelector('input[name=src]:checked').value;
+  let folderIds = [];
+  if (src === 'folder') {
+    folderIds = [setupFolderId];
+  } else if (src === 'several') {
+    folderIds = Array.from(document.querySelectorAll('.fchk:checked')).map(c => c.value);
+    if (!folderIds.length) { $('setupStatus').textContent = 'Избери поне една папка.'; return; }
+  } else {
+    folderIds = folders.map(f => f.id);
+  }
+  const countAll = $('countAll').checked;
+  const count = parseInt($('countInput').value, 10);
+  if (!countAll && (!count || count < 1)) { $('setupStatus').textContent = 'Въведи брой думи или избери „Всички“.'; return; }
+  startSession({ sourceType: src, folderIds, count, countAll });
+});
+
+function buildSessionWords(config){
+  const chosen = config.sourceType === 'all'
+    ? folders
+    : folders.filter(f => config.folderIds.includes(f.id));
+  const pool = []; const used = new Set(); const seenEng = new Set();
+  chosen.forEach(f => {
+    let any = false;
+    f.words.forEach(w => {
+      if (seenEng.has(w.english)) return;      // avoid the same word twice across folders
+      seenEng.add(w.english); ensureStats(w); pool.push(w); any = true;
+    });
+    if (any) used.add(f.id);
+  });
+  const n = config.countAll ? pool.length : Math.min(config.count, pool.length);
+  const selected = config.sourceType === 'folder' ? pickByRecency(pool, n) : pickWeighted(pool, n);
+  return { selected: shuffle(selected), used };
+}
+
+async function startSession(config){
+  const { selected, used } = buildSessionWords(config);
+  if (!selected.length) { $('setupStatus').textContent = 'Няма думи за упражнение.'; return; }
+  quizWords = selected;
+  sessionFolderIds = used;
+  isSingleFolder = config.sourceType === 'folder';
+  singleFolderId = isSingleFolder ? config.folderIds[0] : null;
+  answeredThisSession = new Set();
+  statsDirty = false;
   unlockAudio();                 // enables the 🔊 button and later translation audio
   showScreen('quizScreen');
-  queue = shuffle(quizWords.map(w => w.english));
+  queue = quizWords.map(w => w.english);   // already shuffled
   wrongThisRound = []; round = 1; firstRoundErrors = 0; scored = false;
   nextWord();
 }
-function quitToHome(){ goHome(); }
+async function quitToHome(){ await flushStats(); goHome(); }
 function hideAnswerAreas(){ $('choiceArea').classList.add('hidden'); $('writeArea').classList.add('hidden'); }
 
 async function nextWord(){
@@ -581,7 +740,9 @@ async function nextWord(){
   current = quizWords.find(w => w.english === en);
   $('progress').textContent = 'Остават ' + queue.length + ' думи' + (round > 1 ? ' · кръг ' + round : '');
   $('bigword').textContent = en;
-  mode = Math.random() < 0.5 ? 'choice' : 'write';
+  // words with more than 3 meanings are mostly shown as multiple choice (writing many is tedious)
+  const many = current.meanings.length > 3;
+  mode = Math.random() < (many ? 0.85 : 0.5) ? 'choice' : 'write';
   if (mode === 'choice') {
     $('choiceArea').classList.remove('hidden');
     renderChoices();
@@ -596,10 +757,13 @@ async function nextWord(){
 
 function recordScore(){
   if (scored) return; scored = true;
+  if (!isSingleFolder) return;   // per-folder score only meaningful for a single-folder session
+  const f = folders.find(x => x.id === singleFolderId);
+  if (!f) return;
   const total = quizWords.length;
   const pct = total ? Math.round(firstRoundErrors / total * 100) : 0;
-  currentFolder.lastScore = { errors: firstRoundErrors, total, pct, at: Date.now() };
-  apiUpdate(currentFolder.id, { lastScore: currentFolder.lastScore }).catch(e => console.error(e));
+  f.lastScore = { errors: firstRoundErrors, total, pct, at: Date.now() };
+  statsDirty = true;   // persisted together with word stats in flushStats()
 }
 
 $('listenBtn').addEventListener('click', () => { if (current) speak(current.english, 'nova'); });
@@ -607,15 +771,16 @@ $('nextBtn').addEventListener('click', () => nextWord());
 
 // ---- choice mode (checked locally, no API call) ----
 function buildOptions(word){
-  const correct = word.meanings.slice(0, 6);
+  const correct = word.meanings.slice();                 // show ALL correct meanings so they're selectable
+  const target = Math.max(6, correct.length + 2);        // always keep at least 2 distractors
   const pool = [];
   quizWords.forEach(w => { if (w !== word) w.meanings.forEach(m => pool.push(m)); });
   let distract = [...new Set(pool)].filter(m => !correct.includes(m));
   distract = shuffle(distract);
-  const opts = correct.concat(distract.slice(0, Math.max(0, 6 - correct.length)));
+  const opts = correct.concat(distract.slice(0, Math.max(0, target - correct.length)));
   let i = 0;
-  while (opts.length < 6 && i < FILLER.length) { if (!opts.includes(FILLER[i])) opts.push(FILLER[i]); i++; }
-  return shuffle(opts).slice(0, 6);
+  while (opts.length < target && i < FILLER.length) { if (!opts.includes(FILLER[i])) opts.push(FILLER[i]); i++; }
+  return shuffle(opts);
 }
 function renderChoices(){
   selectedSet = new Set(); locked = false;
@@ -645,6 +810,7 @@ $('checkChoiceBtn').addEventListener('click', () => {
     else if (selectedSet.has(o)) el.classList.add('wrongsel');
   });
   $('checkChoiceBtn').disabled = true;
+  recordFirstAttempt(ok);
   if (ok) onCorrect('Браво!');
   else onWrong('❌ Правилно: ' + correctShown.join(', '));
 });
@@ -660,7 +826,9 @@ async function submitWrite(){
       body: JSON.stringify({ english: current.english, meanings: current.meanings, answer }) });
     const j = await r.json();
     $('quizStatus').textContent = '';
-    if (j.status === 'correct') onCorrect(j.feedback || 'Браво!');
+    const correct = j.status === 'correct';
+    recordFirstAttempt(correct);
+    if (correct) onCorrect(j.feedback || 'Браво!');
     else {
       let msg = '❌ Правилно: ' + current.meanings.join(', ');
       if (j.missed && j.missed.length) msg += ' · Пропусна: ' + j.missed.join(', ');
@@ -691,6 +859,7 @@ function onWrong(msg){
 // ================= TRANSLATION =================
 let sentences = [], sIndex = 0;
 async function startTranslation(){
+  flushStats();                  // save word history from the vocab round
   showScreen('translateScreen');
   $('tStatus').innerHTML = '<div class="spinner"></div>Подготвям изречения…';
   await speak('Excellent! Now translate some sentences.');
@@ -749,8 +918,13 @@ $('tRecBtn').addEventListener('click', async () => {
 });
 
 function finish(){
-  const s = currentFolder && currentFolder.lastScore;
-  $('doneScore').textContent = s ? ('Грешки при първия опит: ' + s.errors + ' от ' + s.total + ' (' + s.pct + '%)') : '';
+  flushStats();
+  let text = '';
+  if (isSingleFolder) {
+    const f = folders.find(x => x.id === singleFolderId);
+    if (f && f.lastScore) text = 'Грешки при първия опит: ' + f.lastScore.errors + ' от ' + f.lastScore.total + ' (' + f.lastScore.pct + '%)';
+  }
+  $('doneScore').textContent = text;
   showScreen('doneScreen');
   speak('Congratulations! You finished. Great work!');
 }
