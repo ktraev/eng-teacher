@@ -1,10 +1,17 @@
 import 'dotenv/config';
+import crypto from 'crypto';
 import express from 'express';
 import multer from 'multer';
+import cookieParser from 'cookie-parser';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import OpenAI, { toFile } from 'openai';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import { listFolders, createFolder, updateFolder, deleteFolder } from './db.js';
+import {
+  listFolders, createFolder, updateFolder, deleteFolder,
+  createUser, getUserByEmail, getUserById,
+} from './db.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -23,14 +30,94 @@ if (!OPENAI_API_KEY) {
   process.exit(1);
 }
 
+// Secret used to sign login cookies. Set SESSION_SECRET in the environment so logins
+// survive restarts; otherwise we generate a temporary one (everyone gets logged out on restart).
+let SESSION_SECRET = process.env.SESSION_SECRET;
+if (!SESSION_SECRET) {
+  SESSION_SECRET = crypto.randomBytes(32).toString('hex');
+  console.warn('  ⚠ No SESSION_SECRET set — using a temporary one. Set SESSION_SECRET to keep users logged in across restarts.');
+}
+const COOKIE = 'et_session';
+const COOKIE_MAX_AGE = 60 * 24 * 60 * 60 * 1000;   // 60 days
+
 // Keep the SDK's own defaults (10-minute timeout). Shortening this caused the SDK to
 // abort slow vision calls mid-response, which surfaced as "Premature close".
 const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 const app = express();
+app.set('trust proxy', 1);   // so req.secure reflects Render's https proxy
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 
 app.use(express.json({ limit: '2mb' }));
+app.use(cookieParser());
 app.use(express.static(join(__dirname, 'public')));
+
+// ---------------------------------------------------------------------------
+// Authentication (email + bcrypt password, session in a signed httpOnly cookie)
+// ---------------------------------------------------------------------------
+function setAuthCookie(req, res, userId) {
+  const token = jwt.sign({ uid: userId }, SESSION_SECRET, { expiresIn: '60d' });
+  res.cookie(COOKIE, token, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: req.secure,       // https only in production; allows http on localhost
+    maxAge: COOKIE_MAX_AGE,
+  });
+}
+
+function requireAuth(req, res, next) {
+  const token = req.cookies?.[COOKIE];
+  if (!token) return res.status(401).json({ error: 'not signed in' });
+  try {
+    req.userId = jwt.verify(token, SESSION_SECRET).uid;
+    next();
+  } catch {
+    res.status(401).json({ error: 'session expired' });
+  }
+}
+
+const normalizeEmail = (e) => String(e || '').trim().toLowerCase();
+const validEmail = (e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e);
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || '');
+    if (!validEmail(email)) return res.status(400).json({ error: 'Невалиден имейл.' });
+    if (password.length < 6) return res.status(400).json({ error: 'Паролата трябва да е поне 6 знака.' });
+    if (await getUserByEmail(email)) return res.status(409).json({ error: 'Вече има акаунт с този имейл.' });
+    const passwordHash = await bcrypt.hash(password, 10);
+    const user = await createUser({ email, passwordHash });
+    setAuthCookie(req, res, user.id);
+    res.json({ user: { email: user.email } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const email = normalizeEmail(req.body.email);
+    const password = String(req.body.password || '');
+    const user = await getUserByEmail(email);
+    if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+      return res.status(401).json({ error: 'Грешен имейл или парола.' });
+    }
+    setAuthCookie(req, res, user.id);
+    res.json({ user: { email: user.email } });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie(COOKIE);
+  res.json({ ok: true });
+});
+
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  const user = await getUserById(req.userId);
+  if (!user) return res.status(401).json({ error: 'not found' });
+  res.json({ user: { email: user.email } });
+});
+
+// Everything below the API requires a signed-in user (protects data AND your OpenAI budget).
+app.use('/api', requireAuth);
 
 // Small helper: pull JSON out of a model reply even if it wraps it in prose/fences.
 function parseJson(text) {
@@ -345,7 +432,7 @@ Her English translation: "${answer}"`;
 // 7. Folders — saved word sets (stored in the local database file)
 // ---------------------------------------------------------------------------
 app.get('/api/folders', async (req, res) => {
-  try { res.json({ folders: await listFolders() }); }
+  try { res.json({ folders: await listFolders(req.userId) }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -354,20 +441,20 @@ app.post('/api/folders', async (req, res) => {
     const { name, words } = req.body;
     if (!name || !Array.isArray(words) || !words.length)
       return res.status(400).json({ error: 'name and words are required' });
-    res.json({ folder: await createFolder({ name, words }) });
+    res.json({ folder: await createFolder(req.userId, { name, words }) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.put('/api/folders/:id', async (req, res) => {
   try {
-    const folder = await updateFolder(req.params.id, req.body || {});
+    const folder = await updateFolder(req.userId, req.params.id, req.body || {});
     if (!folder) return res.status(404).json({ error: 'not found' });
     res.json({ folder });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.delete('/api/folders/:id', async (req, res) => {
-  try { await deleteFolder(req.params.id); res.json({ ok: true }); }
+  try { await deleteFolder(req.userId, req.params.id); res.json({ ok: true }); }
   catch (err) { res.status(500).json({ error: err.message }); }
 });
 

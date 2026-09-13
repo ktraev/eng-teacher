@@ -92,14 +92,37 @@
            gap:10px; justify-content:space-between; z-index:60; box-shadow:0 8px 24px rgba(0,0,0,.45); }
   .toast span { font-size:14px; }
   .toast button { width:auto; margin:0; padding:8px 12px; font-size:14px; }
+
+  /* auth */
+  .auth-sub { text-align:center; color:var(--muted); font-size:14px; margin:-4px 0 14px; }
+  .auth-toggle { text-align:center; color:var(--muted); font-size:14px; margin-top:14px; }
+  .auth-toggle a { color:var(--accent); cursor:pointer; text-decoration:underline; }
+  .topbar { display:flex; justify-content:flex-end; margin-bottom:8px; }
+  .topbar .who { flex:1; color:var(--muted); font-size:13px; align-self:center; }
+  .topbar button { width:auto; margin:0; padding:7px 12px; font-size:13px; }
 </style>
 </head>
 <body>
 <div class="wrap">
   <h1>📚 English Teacher</h1>
 
+  <!-- ============ AUTH ============ -->
+  <div id="authScreen" class="card hidden">
+    <h2 id="authTitle" style="text-align:center">Вход</h2>
+    <div class="auth-sub" id="authSub">Влез в акаунта си, за да продължиш</div>
+    <input id="authEmail" class="txt" type="email" placeholder="Имейл" autocomplete="username" style="margin-bottom:10px" />
+    <input id="authPassword" class="txt" type="password" placeholder="Парола" autocomplete="current-password" />
+    <button id="authSubmit" class="green">Влез</button>
+    <div id="authStatus" class="status"></div>
+    <div class="auth-toggle" id="authToggle">Нямаш акаунт? <a id="authSwitch">Регистрирай се</a></div>
+  </div>
+
   <!-- ============ SCREEN 1a: FOLDERS ============ -->
-  <div id="foldersScreen" class="card">
+  <div id="foldersScreen" class="card hidden">
+    <div class="topbar">
+      <span class="who" id="whoami"></span>
+      <button id="logoutBtn" class="ghost">Изход</button>
+    </div>
     <h2>Папки с думи</h2>
     <div id="folderList"></div>
     <div id="emptyFolders" class="status hidden">Още няма папки. Създай първата!</div>
@@ -203,35 +226,34 @@ const $ = (id) => document.getElementById(id);
 
 // ---------------- storage (server database) ----------------
 let folders = [];
+function onUnauthorized() { folders = []; showAuth('login'); }
+async function readJson(r) {
+  if (r.status === 401) { onUnauthorized(); throw new Error('Сесията изтече. Влез отново.'); }
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || j.error) throw new Error(j.error || ('Грешка ' + r.status));
+  return j;
+}
 async function apiGet() {
-  const r = await fetch('/api/folders');
-  const j = await r.json();
-  if (j.error) throw new Error(j.error);
+  const j = await readJson(await fetch('/api/folders'));
   folders = j.folders || [];
 }
 async function apiCreate(name, words) {
-  const r = await fetch('/api/folders', { method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({ name, words }) });
-  const j = await r.json();
-  if (j.error) throw new Error(j.error);
+  const j = await readJson(await fetch('/api/folders', { method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ name, words }) }));
   return j.folder;
 }
 async function apiUpdate(id, patch) {
-  const r = await fetch('/api/folders/' + id, { method:'PUT', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify(patch) });
-  const j = await r.json();
-  if (j.error) throw new Error(j.error);
+  const j = await readJson(await fetch('/api/folders/' + id, { method:'PUT', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(patch) }));
   return j.folder;
 }
 async function apiDelete(id) {
-  const r = await fetch('/api/folders/' + id, { method:'DELETE' });
-  const j = await r.json();
-  if (j.error) throw new Error(j.error);
+  await readJson(await fetch('/api/folders/' + id, { method:'DELETE' }));
 }
 function escapeHtml(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
 
 // ---------------- screen switching ----------------
-const SCREENS = ['foldersScreen','editorScreen','quizScreen','translateScreen','doneScreen'];
+const SCREENS = ['authScreen','foldersScreen','editorScreen','quizScreen','translateScreen','doneScreen'];
 function showScreen(id){ SCREENS.forEach(s => $(s).classList.toggle('hidden', s !== id)); window.scrollTo(0,0); }
 function goHome(){ renderFolders(); showScreen('foldersScreen'); }
 
@@ -752,18 +774,78 @@ async function migrateLocal(){
   else console.warn('Migration incomplete — keeping the browser backup as a safety net.');
 }
 
+// ---------------- auth ----------------
+let authMode = 'login';
+let currentEmail = null;
+
+function showAuth(mode){
+  authMode = mode;
+  const login = mode === 'login';
+  $('authTitle').textContent = login ? 'Вход' : 'Регистрация';
+  $('authSub').textContent = login ? 'Влез в акаунта си, за да продължиш' : 'Създай нов акаунт';
+  $('authSubmit').textContent = login ? 'Влез' : 'Регистрирай се';
+  $('authToggle').innerHTML = login
+    ? 'Нямаш акаунт? <a id="authSwitch">Регистрирай се</a>'
+    : 'Вече имаш акаунт? <a id="authSwitch">Влез</a>';
+  $('authSwitch').onclick = () => showAuth(login ? 'register' : 'login');
+  $('authStatus').textContent = '';
+  $('authPassword').value = '';
+  showScreen('authScreen');
+}
+
+async function submitAuth(){
+  const email = $('authEmail').value.trim();
+  const password = $('authPassword').value;
+  if (!email || !password) { $('authStatus').textContent = 'Попълни имейл и парола.'; return; }
+  $('authSubmit').disabled = true;
+  $('authStatus').innerHTML = '<div class="spinner"></div>';
+  try {
+    const r = await fetch('/api/auth/' + authMode, { method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ email, password }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || 'Грешка');
+    currentEmail = j.user.email;
+    $('whoami').textContent = currentEmail;
+    $('authStatus').textContent = '';
+    await showApp();
+  } catch (e) {
+    $('authStatus').textContent = e.message;
+  } finally {
+    $('authSubmit').disabled = false;
+  }
+}
+$('authSubmit').addEventListener('click', submitAuth);
+$('authPassword').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
+
+$('logoutBtn').addEventListener('click', async () => {
+  try { await fetch('/api/auth/logout', { method:'POST' }); } catch {}
+  folders = []; currentEmail = null;
+  $('authEmail').value = '';
+  showAuth('login');
+});
+
 // ---------------- boot ----------------
-(async () => {
+async function showApp(){
   try {
     await apiGet();
-    if (!folders.length) { await migrateLocal(); await apiGet(); }   // pull in old browser folders
-  } catch (e) {
-    console.error(e);
-    $('emptyFolders').textContent = 'Няма връзка със сървъра.';
-    $('emptyFolders').classList.remove('hidden');
-  }
+    if (!folders.length) { await migrateLocal(); await apiGet(); }   // pull in old browser folders once
+  } catch (e) { console.error(e); }
   renderFolders();
   showScreen('foldersScreen');
+}
+
+(async () => {
+  try {
+    const r = await fetch('/api/auth/me');
+    if (r.ok) {
+      const j = await r.json();
+      currentEmail = j.user.email;
+      $('whoami').textContent = currentEmail;
+      await showApp();
+      return;
+    }
+  } catch (e) { console.error(e); }
+  showAuth('login');
 })();
 </script>
 </body>

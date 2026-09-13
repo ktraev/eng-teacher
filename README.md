@@ -37,11 +37,16 @@ npm install
 cp .env.example .env
 ```
 
-Open `.env` and paste your OpenAI key (get one at https://platform.openai.com/api-keys):
+Open `.env` and set your OpenAI key (get one at https://platform.openai.com/api-keys) and a session secret:
 
 ```
 OPENAI_API_KEY=sk-...
+SESSION_SECRET=<any long random string, e.g. output of: openssl rand -hex 32>
 ```
+
+`SESSION_SECRET` signs the login cookies. If you skip it the app still runs, but everyone gets logged out whenever the server restarts. On Render, add `SESSION_SECRET` as an environment variable too.
+
+**Accounts:** the app now requires sign-in (email + password). The **first** account you create automatically takes ownership of any folders that already exist in the database, so your current word sets move to your account with no re-import. Each user only sees their own folders.
 
 ## 2. Run it
 
