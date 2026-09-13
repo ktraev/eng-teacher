@@ -130,6 +130,7 @@
       <span class="who" id="whoami"></span>
       <button id="logoutBtn" class="ghost">Изход</button>
     </div>
+    <button id="reviewBtn" class="green hidden" style="margin-bottom:14px"></button>
     <h2>Папки с думи</h2>
     <div id="folderList"></div>
     <div id="emptyFolders" class="status hidden">Още няма папки. Създай първата!</div>
@@ -299,6 +300,20 @@ function renderFolders(){
   const list = $('folderList');
   $('emptyFolders').classList.toggle('hidden', folders.length > 0);
   $('mixedBtn').classList.toggle('hidden', folders.length < 2);   // mixing needs 2+ folders
+
+  // daily review button
+  const due = dueCount();
+  const rb = $('reviewBtn');
+  const anyScheduled = folders.some(f => f.words.some(w => w.srs));
+  if (due > 0) {
+    rb.textContent = '🔁 Преговор за днес · ' + due + (due === 1 ? ' дума' : ' думи');
+    rb.disabled = false; rb.className = 'green'; rb.classList.remove('hidden');
+  } else if (anyScheduled) {
+    rb.textContent = '✓ Няма думи за преговор днес';
+    rb.disabled = true; rb.className = 'ghost'; rb.classList.remove('hidden');
+  } else {
+    rb.classList.add('hidden');   // nothing practised yet — no schedule to show
+  }
   list.innerHTML = folders.map(f => `
     <div class="folder">
       <div class="main" onclick="openSetup('${f.id}')">
@@ -488,15 +503,15 @@ $('addRowBtn').addEventListener('click', addRow);
 $('saveFolderBtn').addEventListener('click', async () => {
   syncFromDom();
   const name = $('folderName').value.trim();
-  // preserve each word's practice history (stats) across edits, matched by english
+  // preserve each word's practice history (stats + review schedule) across edits, matched by english
   const prev = editingId ? (folders.find(x => x.id === editingId)?.words || []) : [];
-  const statByEng = new Map(prev.map(w => [w.english, w.stats]));
+  const prevByEng = new Map(prev.map(w => [w.english, w]));
   const words = editRows
     .filter(r => r.english.trim() && r.meanings.length)
     .map(r => {
       const w = { english:r.english.trim(), meanings:r.meanings };
-      const s = statByEng.get(w.english);
-      if (s) w.stats = s;
+      const p = prevByEng.get(w.english);
+      if (p) { if (p.stats) w.stats = p.stats; if (p.srs) w.srs = p.srs; }
       return w;
     });
   if (!name) { $('saveStatus').textContent = 'Дай име на папката.'; return; }
@@ -595,13 +610,48 @@ let setupFolderId = null;
 
 // ---- per-word history ----
 function ensureStats(w){ if (!w.stats) w.stats = { seen:0, correct:0, wrong:0, lastSeen:0 }; return w.stats; }
+
+// ---- spaced-repetition scheduling (SM-2-lite) ----
+// Graded on the FIRST attempt. Correct answers push the next-review date further out;
+// a miss resets it to tomorrow. A word enters the schedule the first time it's practiced.
+const DAY_MS = 86400000;
+function scheduleWord(w, correct){
+  const now = Date.now();
+  const s = w.srs || { interval: 0, ease: 2.5, reps: 0, lapses: 0, due: now };
+  if (correct) {
+    s.reps = (s.reps || 0) + 1;
+    if (s.reps === 1) s.interval = 1;
+    else if (s.reps === 2) s.interval = 3;
+    else s.interval = Math.max(1, Math.round(s.interval * s.ease));
+    s.ease = Math.min(2.7, (s.ease || 2.5) + 0.05);
+    s.due = now + s.interval * DAY_MS;
+  } else {
+    s.reps = 0;
+    s.lapses = (s.lapses || 0) + 1;
+    s.interval = 0;
+    s.ease = Math.max(1.3, (s.ease || 2.5) - 0.2);
+    s.due = now + DAY_MS;          // come back tomorrow
+  }
+  w.srs = s;
+}
+
 function recordFirstAttempt(correct){
   if (!current || answeredThisSession.has(current.english)) return;
   answeredThisSession.add(current.english);
   const s = ensureStats(current);
   s.seen++; s.lastSeen = Date.now();
   if (correct) s.correct++; else s.wrong++;
+  scheduleWord(current, correct);     // feed the review schedule
   statsDirty = true;
+}
+
+// how many words are due for review right now, across all folders (deduped by english)
+function dueCount(){
+  const now = Date.now(); const seen = new Set(); let n = 0;
+  folders.forEach(f => f.words.forEach(w => {
+    if (w.srs && w.srs.due <= now && !seen.has(w.english)) { seen.add(w.english); n++; }
+  }));
+  return n;
 }
 async function flushStats(){
   if (!statsDirty) return; statsDirty = false;
@@ -718,6 +768,30 @@ async function startSession(config){
   nextWord();
 }
 async function quitToHome(){ await flushStats(); goHome(); }
+
+// ---- daily review: practise every word that is due now, across all folders ----
+const REVIEW_MAX = 40;   // cap a single review session so it never feels endless
+function startReview(){
+  const now = Date.now();
+  const seen = new Set(); const all = []; const used = new Set();
+  folders.forEach(f => f.words.forEach(w => {
+    if (w.srs && w.srs.due <= now && !seen.has(w.english)) { seen.add(w.english); all.push({ w, fid: f.id }); }
+  }));
+  if (!all.length) return;
+  all.sort((a, b) => a.w.srs.due - b.w.srs.due);          // most overdue first
+  const chosen = all.slice(0, REVIEW_MAX);
+  chosen.forEach(x => used.add(x.fid));
+  quizWords = shuffle(chosen.map(x => x.w));
+  sessionFolderIds = used;
+  isSingleFolder = false; singleFolderId = null;
+  answeredThisSession = new Set(); statsDirty = false;
+  unlockAudio();
+  showScreen('quizScreen');
+  queue = quizWords.map(w => w.english);
+  wrongThisRound = []; round = 1; firstRoundErrors = 0; scored = false;
+  nextWord();
+}
+$('reviewBtn').addEventListener('click', startReview);
 function hideAnswerAreas(){ $('choiceArea').classList.add('hidden'); $('writeArea').classList.add('hidden'); }
 
 async function nextWord(){

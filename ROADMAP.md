@@ -45,8 +45,8 @@ Goal: make the current app solid, multi-user, and safe to put in a stranger's ha
 Goal: make it genuinely better at *teaching*, so people want to return daily. This is the most important phase.
 
 - ✅ **Word history + configurable sessions (landed early).** Every word now tracks times seen / correct / wrong / last practiced. Sessions are configurable: choose the number of words (or all) and the source — one folder, several, or all. A single folder is served in **batches by least-recently-practiced**, so repeat sessions continue with the words you haven't done rather than the same ones. Mixed sessions are **error-weighted** — the words you miss most appear more often, with already-known words still stirred in. Words with more than 3 meanings are shown mostly as multiple choice. This is the data foundation the full review schedule builds on.
-- **Spaced repetition (SRS).** Build on that word history with a review schedule (start with a proven algorithm like SM-2 / the FSRS approach). Each day the app surfaces the words due for review. This single feature is what turns a quiz into a habit.
-- **A daily "review" home screen:** "You have 24 words to review today" — the hook that brings people back.
+- ✅ **Spaced repetition (SRS).** Done — an SM-2-lite schedule. Each word, graded on its first attempt, gets pushed further out on success (≈1 → 3 → 8 → 21 → 57 days…) and reset to tomorrow on a miss. A word joins the schedule the first time it's practised, in any session.
+- ✅ **A daily "review" home screen.** Done — a "🔁 Преговор за днес · N думи" button on the home screen shows how many words are due across all folders and runs a review session over them (most overdue first, capped per session so it never feels endless). This is the return hook.
 - **Pronunciation & speaking practice** using the voice infrastructure you already built (word → she says it → feedback), as an optional mode.
 - **Better answer modes mix:** keep the tap/type split, add "reveal & self-rate" (how Anki works) for fast review sessions.
 - **Progress & streaks:** simple stats — words mastered, review streak, per-folder mastery %.
